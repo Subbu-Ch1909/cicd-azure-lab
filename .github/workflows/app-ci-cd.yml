@@ -1,0 +1,107 @@
+name: app-ci-cd
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Validate Docker build
+        run: docker build -t app:test .
+
+      - name: Warmup artifact
+        run: echo "run $GITHUB_RUN_ID" > hello-${{ vars.YOURID4 }}.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hello-${{ vars.YOURID4 }}
+          path: hello-${{ vars.YOURID4 }}.txt
+
+  deploy:
+    needs: build-test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      WEB: ${{ vars.AZURE_WEBAPP_NAME }}
+      ACR: ${{ vars.ACR_NAME }}
+      REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY }}
+      IMAGE_REPO: labapp
+    steps:
+      - uses: actions/checkout@v4
+
+      # Login with OIDC (no subscription here; we set it explicitly next)
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Select subscription
+        env:
+          SID_FROM_SECRET: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          SID_FROM_ALT:    ${{ secrets.SUBSCRIPTION_ID }}
+        run: |
+          SUB="${SID_FROM_SECRET:-$SID_FROM_ALT}"
+          if [ -z "$SUB" ]; then
+            echo "No subscription ID in AZURE_SUBSCRIPTION_ID or SUBSCRIPTION_ID"; exit 1
+          fi
+          az account set --subscription "$SUB"
+          az account show -o table
+
+      - name: Docker login to ACR
+        run: az acr login -n "$ACR"
+
+      - name: Build & Push image
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_SHA::7}-${{ vars.YOURID4 }}"
+          IMAGE="$REGISTRY/$IMAGE_REPO:$TAG"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+
+      - name: Enable MSI-based ACR pulls for the Web App
+        run: |
+          az resource update \
+            -g "$RG" \
+            -n "${WEB}/config/web" \
+            --resource-type Microsoft.Web/sites/config \
+            --set properties.acrUseManagedIdentityCreds=True
+
+      - name: Point Web App to the new image
+        run: |
+          az webapp config container set \
+            -g "$RG" -n "$WEB" \
+            --docker-custom-image-name "$IMAGE" \
+            --docker-registry-server-url "https://$REGISTRY"
+          az webapp config appsettings set \
+            -g "$RG" -n "$WEB" \
+            --settings WEBSITES_PORT=8080
+          az webapp restart -g "$RG" -n "$WEB"
+
+      - name: Show site URL
+        run: |
+          URL=$(az webapp show -g "$RG" -n "$WEB" --query defaultHostName -o tsv)
+          echo "Site: https://$URL"
