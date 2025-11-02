@@ -1,0 +1,25 @@
+name: hello-pipeline
+on:
+  workflow_dispatch:   # manual button to test easily
+  pull_request:
+    branches: [ "main" ]
+  push:
+    branches: [ "main" ]
+
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Print commit SHA
+        run: echo "Commit SHA: $GITHUB_SHA"
+
+      - name: Create warmup artifact
+        run: echo "run $GITHUB_RUN_ID for $GITHUB_REF" > hello-7231.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hello-7231
+          path: hello-7231.txt
