@@ -15,6 +15,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Assert Azure secrets are set
+        run: |
+          [ -z "${{ secrets.AZURE_CLIENT_ID }}" ] && echo "AZURE_CLIENT_ID missing" && exit 1 || true
+          [ -z "${{ secrets.AZURE_TENANT_ID }}" ] && echo "AZURE_TENANT_ID missing" && exit 1 || true
+          [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ] && echo "AZURE_SUBSCRIPTION_ID missing" && exit 1 || true
+          echo "All Azure secrets are present."
+
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
