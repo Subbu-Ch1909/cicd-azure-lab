@@ -12,21 +12,22 @@ jobs:
     permissions:
       id-token: write
       contents: read
+
     steps:
       - uses: actions/checkout@v4
 
       # Print which secrets are present (does NOT reveal values)
       - name: Debug secret presence
         env:
-          CID: ${{ secrets.AZURE_CLIENT_ID }}
-          TID: ${{ secrets.AZURE_TENANT_ID }}
-          SID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          HAS_CID: ${{ secrets.AZURE_CLIENT_ID }}
+          HAS_TID: ${{ secrets.AZURE_TENANT_ID }}
+          HAS_SID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
-          for n in CID TID SID; do
-            v="${!n}"
-            if [ -z "$v" ]; then echo "$n=EMPTY"; else echo "$n=SET"; fi
+          for n in HAS_CID HAS_TID HAS_SID; do
+            if [ -z "${!n}" ]; then echo "$n=EMPTY"; else echo "$n=SET"; fi
           done
 
+      # Login with OIDC (without subscription to avoid the earlier error)
       - name: Azure Login (OIDC without subscription)
         uses: azure/login@v2
         with:
@@ -34,16 +35,16 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           allow-no-subscriptions: true
 
-      - name: Set subscription explicitly and show account
-        env:
-          SID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      # Select the subscription explicitly, then show account
+      - name: Set subscription and show account
         run: |
-          if [ -z "$SID" ]; then
-            echo "AZURE_SUBSCRIPTION_ID is EMPTY (must be a repository secret)"; exit 1
-          fi
-          az account set --subscription "$SID"
+          az account set --subscription "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           az account show -o table
 
+      # Sanity check we can see your web app
       - name: Confirm webapp reachable
         run: |
-          az webapp show -g ${{ vars.AZURE_RESOURCE_GROUP }} -n ${{ vars.AZURE_WEBAPP_NAME }} --query name -o tsv
+          az webapp show \
+            -g ${{ vars.AZURE_RESOURCE_GROUP }} \
+            -n ${{ vars.AZURE_WEBAPP_NAME }} \
+            --query name -o tsv
