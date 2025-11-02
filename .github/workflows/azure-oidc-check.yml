@@ -15,21 +15,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Prove the three secrets exist (fails early with a clear message if not)
       - name: Assert Azure secrets are set
         run: |
           [ -z "${{ secrets.AZURE_CLIENT_ID }}" ] && echo "AZURE_CLIENT_ID missing" && exit 1 || true
           [ -z "${{ secrets.AZURE_TENANT_ID }}" ] && echo "AZURE_TENANT_ID missing" && exit 1 || true
-          [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ] && echo "AZURE_SUBSCRIPTION_ID missing" && exit 1 || true
+          [ -z "${{ secrets.AZURE_SUBSCRIPTION_ID }}" ] && echo "AZURE_SUBSCRIPTION_ID missing or empty" && exit 1 || true
           echo "All Azure secrets are present."
 
-      - name: Azure Login (OIDC)
+      # Login WITHOUT subscription (avoids the error you saw)
+      - name: Azure Login (OIDC without subscription)
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: true
 
-      - name: Show account and webapp
+      # Select the subscription explicitly (will fail with a precise message if empty/invalid)
+      - name: Set subscription and show account
         run: |
+          SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          if [ -z "$SUB" ]; then
+            echo "AZURE_SUBSCRIPTION_ID is empty. Add it under Settings > Secrets and variables > Actions > Secrets." && exit 1
+          fi
+          az account set --subscription "$SUB"
           az account show -o table
+
+      - name: Confirm webapp is reachable by CLI
+        run: |
           az webapp show -g ${{ vars.AZURE_RESOURCE_GROUP }} -n ${{ vars.AZURE_WEBAPP_NAME }} --query name -o tsv
