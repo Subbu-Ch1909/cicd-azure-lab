@@ -39,18 +39,16 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      id-token: write       # for OIDC azure/login
       contents: read
+      packages: write       # needed to push to GHCR
     env:
-      RG: ${{ vars.AZURE_RESOURCE_GROUP }}
+      RG:  ${{ vars.AZURE_RESOURCE_GROUP }}
       WEB: ${{ vars.AZURE_WEBAPP_NAME }}
-      ACR: ${{ vars.ACR_NAME }}
-      REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY }}
-      IMAGE_REPO: labapp
     steps:
       - uses: actions/checkout@v4
 
-      # Login with OIDC (no subscription here; we set it explicitly next)
+      # Login to Azure using OIDC, then select subscription explicitly
       - name: Azure Login (OIDC)
         uses: azure/login@v2
         with:
@@ -60,57 +58,38 @@ jobs:
 
       - name: Select subscription
         env:
-          SID_FROM_SECRET: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          SID_FROM_ALT:    ${{ secrets.SUBSCRIPTION_ID }}
+          SID1: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          SID2: ${{ secrets.SUBSCRIPTION_ID }}  # optional fallback if you used this name
         run: |
-          SUB="${SID_FROM_SECRET:-$SID_FROM_ALT}"
+          SUB="${SID1:-$SID2}"
           if [ -z "$SUB" ]; then
-            echo "No subscription ID in AZURE_SUBSCRIPTION_ID or SUBSCRIPTION_ID"; exit 1
+            echo "No subscription ID in AZURE_SUBSCRIPTION_ID (or SUBSCRIPTION_ID)."; exit 1
           fi
           az account set --subscription "$SUB"
           az account show -o table
 
-      - name: Debug ACR connectivity
-        run: |
-          set -x
-          echo "== Account =="
-          az account show -o table
-          echo "== ACR from ARM =="
-          az acr show -n "$ACR" -o table
-          echo "== Health =="
-          az acr check-health -n "$ACR" --yes || true
-          echo "== DNS =="
-          nslookup ${{ vars.AZURE_CONTAINER_REGISTRY }} || true
-          echo "== HTTPS HEAD =="
-          curl -I https://${{ vars.AZURE_CONTAINER_REGISTRY }}/v2/ || true
+      # Push image to GitHub Container Registry (GHCR)
+      - name: Login to GHCR
+        run: echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-
-      - name: Docker login to ACR
-        run: az acr login -n "$ACR"
-
-      - name: Build & Push image
+      - name: Build & Push image (GHCR)
         run: |
           set -euo pipefail
           TAG="${GITHUB_SHA::7}-${{ vars.YOURID4 }}"
-          IMAGE="$REGISTRY/$IMAGE_REPO:$TAG"
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          IMAGE="ghcr.io/${OWNER}/labapp:${TAG}"
           docker build -t "$IMAGE" .
           docker push "$IMAGE"
           echo "IMAGE=$IMAGE" >> $GITHUB_ENV
+          echo "Pushed $IMAGE"
 
-      - name: Enable MSI-based ACR pulls for the Web App
-        run: |
-          az resource update \
-            -g "$RG" \
-            -n "${WEB}/config/web" \
-            --resource-type Microsoft.Web/sites/config \
-            --set properties.acrUseManagedIdentityCreds=True
-
-      - name: Point Web App to the new image
+      # Point the Web App at the GHCR image (public) and set WEBSITES_PORT
+      - name: Configure Web App container (GHCR)
         run: |
           az webapp config container set \
             -g "$RG" -n "$WEB" \
             --docker-custom-image-name "$IMAGE" \
-            --docker-registry-server-url "https://$REGISTRY"
+            --docker-registry-server-url "https://ghcr.io"
           az webapp config appsettings set \
             -g "$RG" -n "$WEB" \
             --settings WEBSITES_PORT=8080
