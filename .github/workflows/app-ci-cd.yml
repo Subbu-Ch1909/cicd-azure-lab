@@ -70,6 +70,21 @@ jobs:
           az account set --subscription "$SUB"
           az account show -o table
 
+      - name: Debug ACR connectivity
+        run: |
+          set -x
+          echo "== Account =="
+          az account show -o table
+          echo "== ACR from ARM =="
+          az acr show -n "$ACR" -o table
+          echo "== Health =="
+          az acr check-health -n "$ACR" --yes || true
+          echo "== DNS =="
+          nslookup ${{ vars.AZURE_CONTAINER_REGISTRY }} || true
+          echo "== HTTPS HEAD =="
+          curl -I https://${{ vars.AZURE_CONTAINER_REGISTRY }}/v2/ || true
+
+
       - name: Docker login to ACR
         run: az acr login -n "$ACR"
 
